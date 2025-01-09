@@ -13,7 +13,6 @@ from colormath.color_diff import delta_e_cie2000
 # ------------------------------
 # 1. App Configuration
 # ------------------------------
-
 st.set_page_config(
     page_title="🌈 Enhanced LAB Color Analyzer",
     page_icon="🎨",
@@ -27,6 +26,10 @@ st.set_page_config(
 
 @st.cache_data
 def load_csv(uploaded_file):
+    """
+    Loads the CSV from the provided uploaded_file using pandas.
+    Returns the dataframe if successful, otherwise displays an error and returns None.
+    """
     try:
         return pd.read_csv(uploaded_file)
     except Exception as e:
@@ -34,6 +37,10 @@ def load_csv(uploaded_file):
         return None
 
 def validate_dataset(df, required_columns, filename):
+    """
+    Checks if 'df' contains all columns from 'required_columns'.
+    Ensures 'L', 'A', 'B' columns are numeric. Raises ValueError if invalid.
+    """
     missing = set(required_columns) - set(df.columns)
     if missing:
         raise ValueError(f"CSV file '{filename}' is missing required columns: {', '.join(missing)}")
@@ -43,10 +50,16 @@ def validate_dataset(df, required_columns, filename):
             df[col] = pd.to_numeric(df[col], errors='coerce')
     # Check for numeric validity in LAB columns
     if df[['L', 'A', 'B']].isnull().values.any():
-        raise ValueError(f"Missing or invalid numeric values in 'L', 'A', or 'B' columns of '{filename}'.")
+        raise ValueError(
+            f"Missing or invalid numeric values in 'L', 'A', or 'B' columns of '{filename}'."
+        )
     return df
 
 def calculate_delta_e(input_lab, dataset_df):
+    """
+    Calculates the CIE2000 Delta-E between 'input_lab' and each (L, A, B) row in 'dataset_df'.
+    Returns a pandas Series of Delta-E values, one for each row in the dataframe.
+    """
     input_color = LabColor(lab_l=input_lab[0], lab_a=input_lab[1], lab_b=input_lab[2])
     # Compute delta E for each row in the dataset
     delta_e = dataset_df.apply(
@@ -59,6 +72,10 @@ def calculate_delta_e(input_lab, dataset_df):
     return delta_e
 
 def lab_to_rgb(lab_color):
+    """
+    Converts a given LAB color (list/tuple of [L, A, B]) into an RGB triple (0–255 each).
+    Clamps out-of-gamut values to ensure they remain within [0, 255].
+    """
     try:
         lab = LabColor(lab_l=lab_color[0], lab_a=lab_color[1], lab_b=lab_color[2])
         rgb = convert_color(lab, sRGBColor, target_illuminant='d65')
@@ -74,6 +91,13 @@ def lab_to_rgb(lab_color):
         return (0, 0, 0)
 
 def validate_lab_color(lab):
+    """
+    Ensures the LAB color is in the correct format and range:
+      - L between 0 and 100
+      - A between -128 and 127
+      - B between -128 and 127
+    Raises ValueError if invalid.
+    """
     if not isinstance(lab, (list, tuple, np.ndarray)) or len(lab) != 3:
         raise ValueError("Input LAB color must be a list, tuple, or array of three numerical values.")
     L, A, B = lab
@@ -83,6 +107,13 @@ def validate_lab_color(lab):
         raise ValueError("A component must be between -128 and 127.")
     if not (-128 <= B <= 127):
         raise ValueError("B component must be between -128 and 127.")
+
+def lab_to_hex(lab_color):
+    """
+    Converts a LAB color to a HEX string (e.g., #RRGGBB).
+    """
+    rgb = lab_to_rgb(lab_color)
+    return '#{:02x}{:02x}{:02x}'.format(*rgb)
 
 # ------------------------------
 # 3. Main App Functionality
@@ -153,21 +184,23 @@ def main():
     if st.button("🔍 Find Closest Matches"):
         input_lab = [lab_l, lab_a, lab_b]
         try:
+            # Validate input LAB range
             validate_lab_color(input_lab)
+
             # Calculate delta E values for the entire dye dataset
             delta_e_values = calculate_delta_e(input_lab, dye_colors_df)
+
+            # Find the single closest dye
             closest_idx = delta_e_values.idxmin()
             closest_dye = dye_colors_df.iloc[closest_idx]
 
-            # Display Results
+            # Display Closest Match Results
             st.subheader("🎨 Closest Dye Match")
             closest_rgb = lab_to_rgb([closest_dye['L'], closest_dye['A'], closest_dye['B']])
             st.markdown(f"**Estimated Color:** {closest_dye['Estimated Color']}")
             st.markdown(f"**Chromophore:** {closest_dye['Chromophore']}")
             st.markdown(f"**Delta-E:** {delta_e_values[closest_idx]:.2f}")
             st.markdown(f"**SMILES:** {closest_dye['Corrected_SMILES']}")
-
-            # Display the color as a box
             color_box = f'''
                 <div style="
                     width:100px;
@@ -177,6 +210,35 @@ def main():
                 </div>
             '''
             st.markdown(color_box, unsafe_allow_html=True)
+
+            # Display Top 5 Closest Matches
+            st.subheader("🎨 Top 5 Closest Matches")
+            top_5_idxs = delta_e_values.nsmallest(5).index
+            top_5_df = dye_colors_df.loc[top_5_idxs].copy()
+            top_5_df["Delta-E"] = delta_e_values[top_5_idxs]
+
+            # Show a small dataframe of top 5
+            st.dataframe(top_5_df[[
+                "Estimated Color", "Chromophore", "Corrected_SMILES", "Delta-E"
+            ]])
+
+            # Display color boxes for each of the top 5
+            st.markdown("**Color Previews (Top 5)**")
+            for idx, row in top_5_df.iterrows():
+                row_rgb = lab_to_rgb([row["L"], row["A"], row["B"]])
+                color_box = f'''
+                    <div style="
+                        width:100px;
+                        height:50px;
+                        background-color:rgb({row_rgb[0]},{row_rgb[1]},{row_rgb[2]});
+                        border:1px solid #000;">
+                    </div>
+                '''
+                st.markdown(
+                    f"**{row['Estimated Color']}** (ΔE = {row['Delta-E']:.2f})",
+                    unsafe_allow_html=True
+                )
+                st.markdown(color_box, unsafe_allow_html=True)
 
         except Exception as e:
             st.error(f"❌ Error: {e}")
